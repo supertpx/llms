@@ -1,1 +1,5 @@
 modal
+tqdm
+transformers
+datasets
+tokenizers

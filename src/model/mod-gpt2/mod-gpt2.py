@@ -1,114 +1,172 @@
-# Train GPT-2 in five minutes -- for free
-#
-# ```bash
-# pip install modal
-# modal setup
-# modal run wrapper.py
-# ```
-#
-# Note that the end-to-end latency the first time is more like 25 minutes:
-# - five minutes to install Torch (rip)
-# - two minutes to download the pre-tokenized dataset
-# - ten minutes to compile the model with torch.compile
-# - five minutes to train the model
-#
-# On subsequent invocations, the first two steps are not repeated and the compile latency is cut in half.
+# -----------------------------------------------------------------------------
+# PyTorch nn.Module definitions for the GPT-2 model
+import sys
+with open(sys.argv[0]) as f:
+    code = f.read() # read the code of this file ASAP, for logging
+from dataclasses import dataclass
 
-from pathlib import Path
+import torch
+from torch import nn
+import torch.nn.functional as F
+import torch._inductor.config as config
+from ..config import LMConfig
 
-import modal
+# Use of FlexAttention contributed by @KoszarskyB
+from torch.nn.attention.flex_attention import flex_attention, create_block_mask
+flex_attention = torch.compile(flex_attention, dynamic=False)
+create_block_mask = torch.compile(create_block_mask, dynamic=False)
 
 
-app = modal.App("pre-train")
+def norm(x):
+    return F.rms_norm(x, (x.size(-1),))
 
+class CastedLinear(nn.Linear):
 
-REPO_ROOT = Path(__file__).parent
-TARGET = "/root/mod-gpt2/"
+    def __init__(self, in_features, out_features):
+        super().__init__(in_features, out_features, bias=False)
 
-N_H100 = 8
+    def forward(self, x):
+        return F.linear(x, self.weight.to(x.dtype))
 
-COMMIT_SHA = "cbc099dd73291fbd51f08b7b6f9360420f511890"
-SCRIPT_URL = f"https://raw.githubusercontent.com/KellerJordan/modded-nanogpt/{COMMIT_SHA}/train_gpt2.py"
+class Rotary(torch.nn.Module):
 
-image = (
-    modal.Image.debian_slim(python_version="3.12.7")
-    .pip_install("numpy<3", "tqdm")
-    .pip_install(
-        "torch",
-        pre=True,
-        index_url="https://download.pytorch.org/whl/nightly/cu124",  # tested with torch-2.6.0.dev20241120
-    )
-    .apt_install("wget")
-    .run_commands([f"wget -O {TARGET + 'train_gpt2.py'} {SCRIPT_URL}"])
-    .env({"TORCHINDUCTOR_CACHE_DIR": "/root/.inductor-cache"})
-    .env({"TORCHINDUCTOR_FX_GRAPH_CACHE": "1"})
-)
+    def __init__(self, dim, base=10000):
+        super().__init__()
+        self.register_buffer('inv_freq', (1 / base) ** (torch.arange(0, dim, 2) / dim))
+        self.seq_len_cached = None
+        self.cos_cached = None
+        self.sin_cached = None
 
-data = modal.Volume.from_name("fineweb", create_if_missing=True)
-logs = modal.Volume.from_name("modded-nanogpt-logs", create_if_missing=True)
+    def forward(self, x):
+        seq_len = x.shape[1]
+        if seq_len != self.seq_len_cached:
+            t = torch.arange(seq_len, device=x.device)
+            freqs = torch.outer(t, self.inv_freq)
+            self.seq_len_cached = seq_len
+            self.cos_cached = freqs.cos()
+            self.sin_cached = freqs.sin()
+        cos, sin = self.cos_cached[None, :, None, :], self.sin_cached[None, :, None, :]
+        # apply_rotary_emb(x, cos, sin)
+        x1, x2 = x.chunk(2, dim=3)
+        y1 = x1 * cos + x2 * sin
+        y2 = x1 * (-sin) + x2 * cos
+        return torch.cat((y1, y2), 3).type_as(x)
 
-download_image = (
-    modal.Image.debian_slim(python_version="3.12.7")
-    .pip_install("huggingface_hub[hf_transfer]")
-    .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
-)
+class CausalSelfAttention(nn.Module):
 
+    def __init__(self, dim, n_head):
+        super().__init__()
+        assert dim % n_head == 0
+        self.n_head = n_head
+        self.c_q = CastedLinear(dim, dim)
+        self.c_k = CastedLinear(dim, dim)
+        self.c_v = CastedLinear(dim, dim)
+        # value residual lambda
+        self.lamb = nn.Parameter(torch.tensor(0.5)) # @Grad62304977
+        # rotary embeddings
+        self.rotary = Rotary(dim // n_head) # dim // n_head = head_dim
+        # output projection
+        self.c_proj = CastedLinear(dim, dim)
+        self.c_proj.weight.data.zero_() # zero init suggested by @Grad62304977
 
-@app.function(volumes={"/data": data}, image=download_image)
-def get_data(num_chunks: int = 10):
-    # modified from the original in KellerJordan/modded-nanogpt
-    import os
-    from huggingface_hub import hf_hub_download
+    def forward(self, x, v1, block_mask):
+        B, T = x.size(0), x.size(1) # batch size, sequence length
+        assert B == 1, "Must use batch size = 1 for FlexAttention"
+        q = self.c_q(x).view(B, T, self.n_head, -1)
+        k = self.c_k(x).view(B, T, self.n_head, -1)
+        v = self.c_v(x).view(B, T, self.n_head, -1)
+        if v1 is None:
+            v1 = v # This happens if we are in the first block. v needs to be accessed by subsequent blocks
+        v = (1 - self.lamb) * v + self.lamb * v1.view_as(v) # @Grad62304977
+        q, k = norm(q), norm(k) # QK norm suggested by @Grad62304977
+        q, k = self.rotary(q), self.rotary(k)
+        y = flex_attention(q.transpose(1, 2), k.transpose(1, 2), v.transpose(1, 2), block_mask=block_mask)
+        y = y.transpose(1, 2).contiguous().view_as(x) # re-assemble all head outputs side by side
+        y = self.c_proj(y)
+        return y, v1
 
-    # Download the GPT-2 tokens of Fineweb10B from huggingface. This
-    # saves about an hour of startup time compared to regenerating them.
-    def get(fname):
-        local_dir = os.path.join("/data", "fineweb10B")
-        if not os.path.exists(os.path.join(local_dir, fname)):
-            hf_hub_download(
-                repo_id="kjj0/fineweb10B-gpt2",
-                filename=fname,
-                repo_type="dataset",
-                local_dir=local_dir,
-            )
+class MLP(nn.Module):
 
-    get("fineweb_val_%06d.bin" % 0)
+    def __init__(self, dim):
+        super().__init__()
+        self.c_fc   = CastedLinear(dim, 4 * dim)
+        self.c_proj = CastedLinear(4 * dim, dim)
+        self.c_proj.weight.data.zero_() # zero init suggested by @Grad62304977
 
-    for i in range(1, num_chunks + 1):
-        get("fineweb_train_%06d.bin" % i)
+    def forward(self, x):
+        x = self.c_fc(x)
+        x = F.relu(x).square() # https://arxiv.org/abs/2109.08668v2; ~1-2% better than GELU; suggested by @SKYLINEZ007 and @Grad62304977
+        x = self.c_proj(x)
+        return x
 
+class Block(nn.Module):
 
-@app.function(
-    image=image,
-    gpu=f"H100:{N_H100}",
-    volumes={
-        TARGET + "data": data,
-        TARGET + "logs": logs,
-        # mount the caches of torch.compile and friends
-        "/root/.nv": modal.Volume.from_name("nanogpt-nv-cache", create_if_missing=True),
-        "/root/.triton": modal.Volume.from_name(
-            "nanogpt-triton-cache", create_if_missing=True
-        ),
-        "/root/.inductor-cache": modal.Volume.from_name(
-            "nanogpt-inductor-cache", create_if_missing=True
-        ),
-    },
-    timeout=30 * 60,
-)
-def train():
-    import os
-    import subprocess
+    def __init__(self, config):
+        super().__init__()
+        self.attn = CausalSelfAttention(config.n_embd, config.n_head)
+        self.mlp = MLP(config.n_embd)
+        self.lambdas = nn.Parameter(torch.tensor([1., 0.]))
 
-    os.chdir(TARGET)
-    # makes the torch compile step less boring
-    os.environ["TORCH_LOGS"] = "dynamo,graph"
+    def forward(self, x, v1, x0, block_mask):
+        x = self.lambdas[0] * x + self.lambdas[1] * x0
+        x1, v1 = self.attn(norm(x), v1, block_mask)
+        x = x + x1
+        x = x + self.mlp(norm(x))
+        return x, v1
 
-    subprocess.run(
-        ["torchrun", "--standalone", f"--nproc_per_node={N_H100}", "train_gpt2.py"]
-    )
+# -----------------------------------------------------------------------------
+# The main GPT-2 model
 
+class GPT(nn.Module):
 
-@app.local_entrypoint()
-def main():
-    get_data.remote()
-    train.remote()
+    def __init__(self, args: LMConfig):
+        super().__init__()
+
+        # U-net design by @brendanh0gan
+        self.num_encoder_layers = args.n_layer // 2 # Half of the layers for encoder
+        self.num_decoder_layers = args.n_layer - self.num_encoder_layers # Remaining for decoder
+        # Add learnable skip connection weights for decoder layers
+        self.skip_weights = nn.Parameter(torch.ones(self.num_decoder_layers))
+
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(args.vocab_size, args.n_embd),
+            h = nn.ModuleList([Block(args) for _ in range(args.n_layer)]),
+        ))
+        self.lm_head = CastedLinear(args.n_embd, args.vocab_size)
+        self.lm_head.weight.data.zero_() # @Grad62304977
+
+    def forward(self, idx, target, attn_blocksize):
+
+        docs = (idx == 50256).cumsum(0)
+        def document_causal_mask(b, h, q_idx, kv_idx):
+          causal_mask = q_idx >= kv_idx
+          document_mask = docs[q_idx] == docs[kv_idx]
+          window_mask = q_idx - kv_idx < attn_blocksize
+          return causal_mask & document_mask & window_mask
+
+        S = len(idx)
+        block_mask = create_block_mask(document_causal_mask, None, None, S, S, device="cuda", _compile=True)
+
+        # forward the GPT model itself
+        x = self.transformer.wte(idx[None]) # token embeddings of shape (b, t, n_embd)
+        x = norm(x) # @Grad62304977
+        x0 = x
+        v1 = None
+
+        # Store outputs for U-Net skip connections
+        skip_connections = []
+        # Encoder pass - process only the first half of the blocks
+        for i in range(self.num_encoder_layers):
+            x, v1 = self.transformer.h[i](x, v1, x0, block_mask)
+            skip_connections.append(x)
+        # Decoder pass - process the remaining blocks with weighted skip connections
+        for i in range(self.num_decoder_layers):
+            x = x + self.skip_weights[i] * skip_connections.pop()
+            x, v1 = self.transformer.h[self.num_encoder_layers + i](x, v1, x0, block_mask)
+
+        x = norm(x)
+        logits = self.lm_head(x)
+        logits = 30 * torch.tanh(logits / 30) # @Grad62304977
+        logits = logits.float()
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), target.view(-1))
+        return loss
