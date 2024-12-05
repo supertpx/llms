@@ -9,7 +9,7 @@ import torch
 from torch import nn
 import torch.nn.functional as F
 import torch._inductor.config as config
-from ..config import LMConfig
+from llms.models import LMConfig
 
 # Use of FlexAttention contributed by @KoszarskyB
 from torch.nn.attention.flex_attention import flex_attention, create_block_mask
