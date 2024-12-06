@@ -10,7 +10,7 @@ import torch.nn.functional as F
 from torch import nn
 from transformers import PreTrainedModel
 from transformers.modeling_outputs import CausalLMOutputWithPast
-from llms.models import LMConfig
+from llms.models.config import LMConfig
 
 class RMSNorm(torch.nn.Module):
     def __init__(self, dim: int, eps: float):
