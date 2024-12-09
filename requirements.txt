@@ -4,3 +4,4 @@ transformers
 datasets
 tokenizers
 sentencepiece
+pytorch

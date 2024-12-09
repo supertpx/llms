@@ -14,16 +14,45 @@ from tokenizers import (
 )
 from tokenizers.implementations import SentencePieceBPETokenizer
 import os
+from pathlib import Path
 
 random.seed(818)
+
+filepath = str(Path(__file__).parent.parent)
+train_data = "/data/mobvoi_seq_monkey_general_open_corpus.jsonl"
+tokenizer_data = "/data/tokenizer_data.jsonl"
+
+
+def sample_data_from_jsonl(input_file, output_file, sample_ratio=0.1):
+    """
+    从 JSONL 文件中按指定比例随机抽取数据并保存到新的 JSONL 文件。
+
+    :param input_file: 输入的 JSONL 文件路径
+    :param output_file: 输出的 JSONL 文件路径
+    :param sample_ratio: 抽取的比例 (0 < sample_ratio <= 1)
+    """
+    if not (0 < sample_ratio <= 1):
+        raise ValueError("sample_ratio must be between 0 and 1")
+
+    with open(input_file, "r", encoding="utf-8") as infile, open(
+        output_file, "w", encoding="utf-8"
+    ) as outfile:
+        for line in tqdm(infile, desc="Sampling data"):
+            if random.random() < sample_ratio:
+                outfile.write(line)
+
+
+def process_data():
+    sample_data_from_jsonl(filepath + train_data, filepath + tokenizer_data)
+
 
 def train_tokenizer():
     # 读取JSONL文件并提取文本数据
     def read_texts_from_jsonl(file_path):
-        with open(file_path, 'r', encoding='utf-8') as f:
+        with open(file_path, "r", encoding="utf-8") as f:
             for line in f:
                 data = json.loads(line)
-                yield data['text']
+                yield data["text"]
 
     def get_training_corpus(file_path, batch_size=1000):
         batch = []
@@ -35,8 +64,6 @@ def train_tokenizer():
         if batch:
             yield batch
 
-    data_path = './data/mobvoi_seq_monkey_general_open_corpus.jsonl'
-
     # 初始化tokenizer
     tokenizer = SentencePieceBPETokenizer()
 
@@ -45,11 +72,12 @@ def train_tokenizer():
 
     # 训练tokenizer
     tokenizer.train_from_iterator(
-        get_training_corpus(data_path),
+        get_training_corpus(filepath + tokenizer_data),
         vocab_size=6666,
         special_tokens=special_tokens,  # 确保specialtoken被包含
         show_progress=True,
-        initial_alphabet=pre_tokenizers.ByteLevel.alphabet())
+        initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
+    )
 
     # 设置解码器
     tokenizer.decoder = decoders.ByteLevel()
@@ -79,7 +107,7 @@ def train_tokenizer():
                 "normalized": False,
                 "rstrip": False,
                 "single_word": False,
-                "special": True
+                "special": True,
             },
             "1": {
                 "content": "<pad>",
@@ -87,7 +115,7 @@ def train_tokenizer():
                 "normalized": False,
                 "rstrip": False,
                 "single_word": False,
-                "special": True
+                "special": True,
             },
             "2": {
                 "content": "<mask>",
@@ -95,7 +123,7 @@ def train_tokenizer():
                 "normalized": False,
                 "rstrip": False,
                 "single_word": False,
-                "special": True
+                "special": True,
             },
             "3": {
                 "content": "<s>",
@@ -103,7 +131,7 @@ def train_tokenizer():
                 "normalized": False,
                 "rstrip": False,
                 "single_word": False,
-                "special": True
+                "special": True,
             },
             "4": {
                 "content": "</s>",
@@ -111,8 +139,8 @@ def train_tokenizer():
                 "normalized": False,
                 "rstrip": False,
                 "single_word": False,
-                "special": True
-            }
+                "special": True,
+            },
         },
         "additional_special_tokens": [],
         "bos_token": "<s>",
@@ -126,11 +154,13 @@ def train_tokenizer():
         "tokenizer_class": "PreTrainedTokenizerFast",
         "unk_token": "<unk>",
         "use_default_system_prompt": False,
-        "chat_template": "{% if messages[0]['role'] == 'system' %}{% set system_message = messages[0]['content'] %}{% endif %}{% if system_message is defined %}{{ system_message }}{% endif %}{% for message in messages %}{% set content = message['content'] %}{% if message['role'] == 'user' %}{{ '<s>user\\n' + content + '</s>\\n<s>assistant\\n' }}{% elif message['role'] == 'assistant' %}{{ content + '</s>' + '\\n' }}{% endif %}{% endfor %}"
+        "chat_template": "{% if messages[0]['role'] == 'system' %}{% set system_message = messages[0]['content'] %}{% endif %}{% if system_message is defined %}{{ system_message }}{% endif %}{% for message in messages %}{% set content = message['content'] %}{% if message['role'] == 'user' %}{{ '<s>user\\n' + content + '</s>\\n<s>assistant\\n' }}{% elif message['role'] == 'assistant' %}{{ content + '</s>' + '\\n' }}{% endif %}{% endfor %}",
     }
 
     # 保存配置文件
-    with open(os.path.join(tokenizer_dir, "tokenizer_config.json"), "w", encoding="utf-8") as config_file:
+    with open(
+        os.path.join(tokenizer_dir, "tokenizer_config.json"), "w", encoding="utf-8"
+    ) as config_file:
         json.dump(config, config_file, ensure_ascii=False, indent=4)
 
     print("Tokenizer training completed and saved.")
@@ -144,30 +174,29 @@ def eval_tokenizer():
 
     messages = [
         {"role": "system", "content": "你是一个优秀的聊天机器人，总是给我正确的回应！"},
-        {"role": "user", "content": '你来自哪里？'},
-        {"role": "assistant", "content": '我来自地球'}
+        {"role": "user", "content": "你来自哪里？"},
+        {"role": "assistant", "content": "我来自地球"},
     ]
-    new_prompt = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False
-    )
+    new_prompt = tokenizer.apply_chat_template(messages, tokenize=False)
     print(new_prompt)
 
     # 获取实际词汇表长度（包括特殊符号）
     actual_vocab_size = len(tokenizer)
-    print('tokenizer实际词表长度：', actual_vocab_size)
+    print("tokenizer实际词表长度：", actual_vocab_size)
 
     model_inputs = tokenizer(new_prompt)
-    print('encoder长度：', len(model_inputs['input_ids']))
+    print("encoder长度：", len(model_inputs["input_ids"]))
 
-    input_ids = model_inputs['input_ids']
+    input_ids = model_inputs["input_ids"]
     response = tokenizer.decode(input_ids)
-    print('decoder和原始文本是否一致：', response == new_prompt)
+    print("decoder和原始文本是否一致：", response == new_prompt)
+
 
 def main():
+    # process_data()
     train_tokenizer()
     # eval_tokenizer()
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
