@@ -12,9 +12,10 @@ from tokenizers import (
     trainers,
     Tokenizer,
 )
+from tokenizers.implementations import SentencePieceBPETokenizer
 import os
 
-random.seed(42)
+random.seed(818)
 
 def train_tokenizer():
     # 读取JSONL文件并提取文本数据
@@ -24,42 +25,47 @@ def train_tokenizer():
                 data = json.loads(line)
                 yield data['text']
 
-    data_path = './dataset/tokenizer_train.jsonl'
+    def get_training_corpus(file_path, batch_size=1000):
+        batch = []
+        for text in read_texts_from_jsonl(file_path):
+            batch.append(text)
+            if len(batch) == batch_size:
+                yield batch
+                batch = []
+        if batch:
+            yield batch
+
+    data_path = './data/mobvoi_seq_monkey_general_open_corpus.jsonl'
 
     # 初始化tokenizer
-    tokenizer = Tokenizer(models.BPE())
-    tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+    tokenizer = SentencePieceBPETokenizer()
 
     # 定义特殊token
-    special_tokens = ["<unk>", "<s>", "</s>"]
-
-    # 设置训练器并添加特殊token
-    trainer = trainers.BpeTrainer(
-        vocab_size=6400,
-        special_tokens=special_tokens,  # 确保这三个token被包含
-        show_progress=True,
-        initial_alphabet=pre_tokenizers.ByteLevel.alphabet()
-    )
-
-    # 读取文本数据
-    texts = read_texts_from_jsonl(data_path)
+    special_tokens = ["<unk>", "<pad>", "<mask>", "<s>", "</s>"]
 
     # 训练tokenizer
-    tokenizer.train_from_iterator(texts, trainer=trainer)
+    tokenizer.train_from_iterator(
+        get_training_corpus(data_path),
+        vocab_size=6666,
+        special_tokens=special_tokens,  # 确保specialtoken被包含
+        show_progress=True,
+        initial_alphabet=pre_tokenizers.ByteLevel.alphabet())
 
     # 设置解码器
     tokenizer.decoder = decoders.ByteLevel()
 
     # 检查特殊token的索引
     assert tokenizer.token_to_id("<unk>") == 0
-    assert tokenizer.token_to_id("<s>") == 1
-    assert tokenizer.token_to_id("</s>") == 2
+    assert tokenizer.token_to_id("<pad>") == 1
+    assert tokenizer.token_to_id("<mask>") == 2
+    assert tokenizer.token_to_id("<s>") == 3
+    assert tokenizer.token_to_id("</s>") == 4
 
     # 保存tokenizer
-    tokenizer_dir = "./model/minimind_tokenizer"
+    tokenizer_dir = "./model/xmind_tokenizer"
     os.makedirs(tokenizer_dir, exist_ok=True)
     tokenizer.save(os.path.join(tokenizer_dir, "tokenizer.json"))
-    tokenizer.model.save("./model/minimind_tokenizer")
+    tokenizer.model.save("./model/xmind_tokenizer")
 
     # 手动创建配置文件
     config = {
@@ -76,7 +82,7 @@ def train_tokenizer():
                 "special": True
             },
             "1": {
-                "content": "<s>",
+                "content": "<pad>",
                 "lstrip": False,
                 "normalized": False,
                 "rstrip": False,
@@ -84,6 +90,22 @@ def train_tokenizer():
                 "special": True
             },
             "2": {
+                "content": "<mask>",
+                "lstrip": False,
+                "normalized": False,
+                "rstrip": False,
+                "single_word": False,
+                "special": True
+            },
+            "3": {
+                "content": "<s>",
+                "lstrip": False,
+                "normalized": False,
+                "rstrip": False,
+                "single_word": False,
+                "special": True
+            },
+            "4": {
                 "content": "</s>",
                 "lstrip": False,
                 "normalized": False,
@@ -118,7 +140,7 @@ def eval_tokenizer():
     from transformers import AutoTokenizer
 
     # 加载预训练的tokenizer
-    tokenizer = AutoTokenizer.from_pretrained("./model/minimind_tokenizer")
+    tokenizer = AutoTokenizer.from_pretrained("./model/xmind_tokenizer")
 
     messages = [
         {"role": "system", "content": "你是一个优秀的聊天机器人，总是给我正确的回应！"},
@@ -143,8 +165,8 @@ def eval_tokenizer():
     print('decoder和原始文本是否一致：', response == new_prompt)
 
 def main():
-    # train_tokenizer()
-    eval_tokenizer()
+    train_tokenizer()
+    # eval_tokenizer()
 
 
 if __name__ == '__main__':

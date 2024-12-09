@@ -3,3 +3,4 @@ tqdm
 transformers
 datasets
 tokenizers
+sentencepiece
