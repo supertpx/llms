@@ -47,7 +47,7 @@ def process_data():
     sample_data_from_jsonl(filepath + train_data, filepath + tokenizer_data)
 
 
-def train_tokenizer():
+def train_tokenizer(type="sentencepiece"):
     # 读取JSONL文件并提取文本数据
     def read_texts_from_jsonl(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
@@ -65,20 +65,37 @@ def train_tokenizer():
         if batch:
             yield batch
 
-    # 初始化tokenizer
-    tokenizer = SentencePieceBPETokenizer()
-
     # 定义特殊token
     special_tokens = ["<unk>", "<pad>", "<mask>", "<s>", "</s>"]
 
-    # 训练tokenizer
-    tokenizer.train_from_iterator(
-        get_training_corpus(filepath + tokenizer_data),
-        vocab_size=6666,
-        special_tokens=special_tokens,  # 确保specialtoken被包含
-        show_progress=True,
-        initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
-    )
+    # 读取文本数据
+    texts = read_texts_from_jsonl(filepath + tokenizer_data)
+    if type == "sentencepiece":
+        # 初始化tokenizer
+        tokenizer = SentencePieceBPETokenizer(add_prefix_space=False)
+
+        # 训练tokenizer
+        tokenizer.train_from_iterator(
+            texts,
+            vocab_size=6666,
+            special_tokens=special_tokens,  # 确保specialtoken被包含
+            show_progress=True,
+            initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
+        )
+    elif type == "bpe":
+        # 初始化tokenizer
+        tokenizer = Tokenizer(models.BPE())
+        tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+        # 设置训练器并添加特殊token
+        trainer = trainers.BpeTrainer(
+            vocab_size=6666,
+            special_tokens=special_tokens,  # 保specialtoken被包含
+            show_progress=True,
+            initial_alphabet=pre_tokenizers.ByteLevel.alphabet()
+        )
+        # 训练tokenizer
+        tokenizer.train_from_iterator(texts, trainer=trainer)
+
 
     # 设置解码器
     tokenizer.decoder = decoders.ByteLevel()
@@ -149,7 +166,8 @@ def train_tokenizer():
         "eos_token": "</s>",
         "legacy": True,
         "model_max_length": 1000000000000000019884624838656,
-        "pad_token": None,
+        "pad_token": "<pad>",
+        "mask_token": "<mask>",
         "sp_model_kwargs": {},
         "spaces_between_special_tokens": False,
         "tokenizer_class": "PreTrainedTokenizerFast",
@@ -196,7 +214,7 @@ def eval_tokenizer():
 
 def main():
     # process_data()
-    # train_tokenizer()
+    train_tokenizer("bpe")
     eval_tokenizer()
 
 
