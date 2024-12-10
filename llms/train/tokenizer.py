@@ -214,7 +214,7 @@ def eval_tokenizer():
 
 def main():
     # process_data()
-    train_tokenizer("bpe")
+    # train_tokenizer("bpe")
     eval_tokenizer()
 
 
