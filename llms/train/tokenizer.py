@@ -186,10 +186,11 @@ def eval_tokenizer():
     print("tokenizer实际词表长度：", actual_vocab_size)
 
     model_inputs = tokenizer(new_prompt)
-    print("encoder长度：", len(model_inputs["input_ids"]))
+    print(f"encoder长度: {len(model_inputs["input_ids"])} , model_inputs: {model_inputs}")
 
     input_ids = model_inputs["input_ids"]
     response = tokenizer.decode(input_ids)
+    print("response", response)
     print("decoder和原始文本是否一致：", response == new_prompt)
 
 
