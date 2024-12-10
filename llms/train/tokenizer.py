@@ -117,7 +117,7 @@ def train_tokenizer(type="sentencepiece"):
     config = {
         "add_bos_token": False,
         "add_eos_token": False,
-        "add_prefix_space": True,
+        "add_prefix_space": False,
         "added_tokens_decoder": {
             "0": {
                 "content": "<unk>",
