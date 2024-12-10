@@ -1,4 +1,6 @@
 import random
+import os
+from pathlib import Path
 from tqdm import tqdm
 from transformers import AutoTokenizer
 import json
@@ -13,14 +15,13 @@ from tokenizers import (
     Tokenizer,
 )
 from tokenizers.implementations import SentencePieceBPETokenizer
-import os
-from pathlib import Path
 
 random.seed(818)
 
-filepath = str(Path(__file__).parent.parent)
+filepath = str(Path(__file__).parent)
 train_data = "/data/mobvoi_seq_monkey_general_open_corpus.jsonl"
 tokenizer_data = "/data/tokenizer_data.jsonl"
+tokenizer_dir = str(Path(__file__).parent.parent) + "/models/xmind_tokenizer"
 
 
 def sample_data_from_jsonl(input_file, output_file, sample_ratio=0.1):
@@ -90,10 +91,10 @@ def train_tokenizer():
     assert tokenizer.token_to_id("</s>") == 4
 
     # 保存tokenizer
-    tokenizer_dir = "./model/xmind_tokenizer"
+
     os.makedirs(tokenizer_dir, exist_ok=True)
     tokenizer.save(os.path.join(tokenizer_dir, "tokenizer.json"))
-    tokenizer.model.save("./model/xmind_tokenizer")
+    tokenizer.model.save(tokenizer_dir)
 
     # 手动创建配置文件
     config = {
@@ -170,7 +171,7 @@ def eval_tokenizer():
     from transformers import AutoTokenizer
 
     # 加载预训练的tokenizer
-    tokenizer = AutoTokenizer.from_pretrained("./model/xmind_tokenizer")
+    tokenizer = AutoTokenizer.from_pretrained(tokenizer_dir)
 
     messages = [
         {"role": "system", "content": "你是一个优秀的聊天机器人，总是给我正确的回应！"},
@@ -194,8 +195,8 @@ def eval_tokenizer():
 
 def main():
     # process_data()
-    train_tokenizer()
-    # eval_tokenizer()
+    # train_tokenizer()
+    eval_tokenizer()
 
 
 if __name__ == "__main__":
