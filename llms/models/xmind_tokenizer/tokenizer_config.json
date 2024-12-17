@@ -1,7 +1,7 @@
 {
     "add_bos_token": false,
     "add_eos_token": false,
-    "add_prefix_space": true,
+    "add_prefix_space": false,
     "added_tokens_decoder": {
         "0": {
             "content": "<unk>",
@@ -50,7 +50,8 @@
     "eos_token": "</s>",
     "legacy": true,
     "model_max_length": 1000000000000000019884624838656,
-    "pad_token": null,
+    "pad_token": "<pad>",
+    "mask_token": "<mask>",
     "sp_model_kwargs": {},
     "spaces_between_special_tokens": false,
     "tokenizer_class": "PreTrainedTokenizerFast",

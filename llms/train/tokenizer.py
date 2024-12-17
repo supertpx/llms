@@ -69,19 +69,21 @@ def train_tokenizer(type="sentencepiece"):
     special_tokens = ["<unk>", "<pad>", "<mask>", "<s>", "</s>"]
 
     # 读取文本数据
-    texts = read_texts_from_jsonl(filepath + tokenizer_data)
+    # texts=read_texts_from_jsonl(filepath + tokenizer_data)
     if type == "sentencepiece":
         # 初始化tokenizer
-        tokenizer = SentencePieceBPETokenizer(add_prefix_space=False)
-
+        tokenizer = SentencePieceBPETokenizer()
+        tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel(add_prefix_space=False)
+        tokenizer.normalizer = None
         # 训练tokenizer
         tokenizer.train_from_iterator(
-            texts,
+            get_training_corpus(filepath + tokenizer_data),
             vocab_size=6666,
             special_tokens=special_tokens,  # 确保specialtoken被包含
             show_progress=True,
-            initial_alphabet=pre_tokenizers.ByteLevel.alphabet(),
         )
+        # 设置解码器
+        tokenizer.decoder = decoders.ByteLevel()
     elif type == "bpe":
         # 初始化tokenizer
         tokenizer = Tokenizer(models.BPE())
@@ -94,11 +96,10 @@ def train_tokenizer(type="sentencepiece"):
             initial_alphabet=pre_tokenizers.ByteLevel.alphabet()
         )
         # 训练tokenizer
-        tokenizer.train_from_iterator(texts, trainer=trainer)
+        tokenizer.train_from_iterator(read_texts_from_jsonl(filepath + tokenizer_data), trainer=trainer)
+        # 设置解码器
+        tokenizer.decoder = decoders.ByteLevel()
 
-
-    # 设置解码器
-    tokenizer.decoder = decoders.ByteLevel()
 
     # 检查特殊token的索引
     assert tokenizer.token_to_id("<unk>") == 0
@@ -204,9 +205,9 @@ def eval_tokenizer():
     print("tokenizer实际词表长度：", actual_vocab_size)
 
     model_inputs = tokenizer(new_prompt)
-    print(f"encoder长度: {len(model_inputs["input_ids"])} , model_inputs: {model_inputs}")
-
     input_ids = model_inputs["input_ids"]
+    print(f"encoder长度: {len(input_ids)} , model_inputs: {model_inputs}")
+
     response = tokenizer.decode(input_ids)
     print("response", response)
     print("decoder和原始文本是否一致：", response == new_prompt)
@@ -214,7 +215,7 @@ def eval_tokenizer():
 
 def main():
     # process_data()
-    # train_tokenizer("bpe")
+    train_tokenizer()
     eval_tokenizer()
 
 
