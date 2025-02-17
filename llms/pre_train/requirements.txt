@@ -1,0 +1,8 @@
+modal
+tqdm
+transformers
+datasets
+tokenizers
+sentencepiece
+jinja2
+torch
