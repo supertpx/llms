@@ -1,3 +1,3 @@
-llms/train/data/mobvoi_seq_monkey_general_open_corpus.jsonl
-llms/train/data/tokenizer_data.jsonl
+/data/mobvoi_seq_monkey_general_open_corpus.jsonl
+/data/tokenizer_data.jsonl
 .vscode/launch.json
